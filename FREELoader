@@ -1,0 +1,333 @@
+#!/bin/bash
+#
+# Freeloader
+#
+# 2012 Eirik Olsnes SAIKO Design
+# @author Eirik O. <eirik.olsnes@gmail.com>
+
+clear
+
+VERSION_UPPER=0
+VERSION_LOWER=4
+
+printf "========================================================================
+ FREELoader   (v.$VERSION_UPPER.$VERSION_LOWER)                                      SAIKO Design
+________________________________________________________________________"
+
+usage() { 
+	printf "
+
+
+    < - - - - - - - - - - - - - - - - - - - - - - - - - -
+	 
+    Speed up downloads by downloading from several locations
+	 
+  <-----------------------------------------------------------
+	 
+	
+........................................................................
+	
+	
+Usage: $0 url [mirror1 mirror2 ... mirror8]
+	
+	 
+........................................................................
+	
+
+Divide filesize to several byte ranges and assign to usable hosts
+The host limit could be avoided by using args directly in the $# variable
+	
+Usable hosts can be: 
+	
+	1 non-resumeable host + 8 resumeable hosts (discards surplus hosts)
+	0 non-resumable hosts + 9 resumeable hosts
+	
+Install: sudo ln -s /Users/eirik/Commands/FREELoader /usr/local/bin/.
+
+
+________________________________________________________________________
+"
+	exit 1
+}
+
+startDownload() {
+	local url=$1
+	#printf "$FileName"_part_"$active_downloads \t ByteRange: \t $allocated_bytes - $byte_offset \n"
+	
+	printf "%d \t %20d - %20d \n" "$active_downloads" "$allocated_bytes" "$byte_offset"
+
+	(curl -s -r $allocated_bytes-$byte_offset $url -o "$FileName"_part_"$active_downloads" &)
+
+	allocated_bytes=$byte_offset
+	byte_offset=$((byte_offset+byte_offset))
+	((active_downloads++))
+}
+
+[[ $# -lt 1 ]] && usage
+
+# TODO: 
+# Watch download folder, display downloads progress,
+# resume interrupted (after t time), resume part_0 on resume server if interrupted
+# write in C / C++ - use libcurl + other dns (bad curl blocking lookups and bad cace)
+# howto easiest/best add ObjC/Cocoa gui?
+# Output into variable(s), to be redisplayed in text gui.. 
+# Check if servers support to resume download ("Accept-Ranges: bytes" = YES)
+# PS: server dependent - reported to not respect max range sometimes..
+# Todo: use -M max bytes total in adition to just range?
+# Todo: 
+# - Get array (or string to be parsed.. more data in one go!)
+# - Cut hostnames from //(hostname)/ to shorten the line length
+# - other dns - curl is blocking! use c-ares asych dns - compile flag.. disable cache?
+# - create socket and do multi downloads
+# - handle errors (on sizes, http-connect, transfer, data integrity, cat process)
+# - write in C++ using libcurl + ncurses, or in C++ using ASIO+URDI ?
+#   or write in java for compatibility - but high ram usage?
+#   chose the most portable+managable+fast+small-footprint?
+
+checkLength() {
+	local url=$1
+	local size=`curl -I -f -s -m 3 "$1" | awk '/Content-Length/ { printf "%d\n", $2 }'`
+	#[$size == $SIZE] && 
+	printf "$size"
+	#echo "$size"
+}
+
+echo checkLength $1
+
+declare -i SIZE=`checkLength $1`
+
+#echo $@
+#echo "$1"
+
+printf "$SIZE"
+
+#exit 5
+
+declare -i URLCOUNT=$# 	# Assuming each argument is a valid url for same file
+BYTE_SHARE=$((SIZE/URLCOUNT)) 	# For presision: echo "$SIZE/$URLCOUNT" | bc
+RESUME_HOSTS=() 	# Hosts supporting resume - accepts range in bytes
+NONRESUME_HOSTS=() 	# Hosts NOT supporting resume - can only download from byte 0
+printf " 
+
+Checking if servers support byte ranges (split and resume downloads)...
+
+"
+for URL in "$@" # "${URLS[@]}"
+do
+	# Check for "Accept-Ranges: bytes" in HEAD
+	RESUME=`curl -I -f -s -m 3 ${URL} | awk '/Accept-Ranges/ { print $2 }'` # echo -n ... remove newline at end?
+	case "$RESUME" in
+		bytes ) 
+			printf "\033[1m\033[31mOK\033[0m  $URL\n" 	# not triggered
+			RESUME_HOSTS+=($URL)
+			;;
+		bytes* ) 
+			printf "\033[32mOK\033[0m  $URL\n" 	# + extra char junk, newline or such"
+			RESUME_HOSTS+=($URL)
+			;;
+		* ) 
+			printf "\033[31mFAIL\033[0m  $URL\n" 	# Todo: Check best connection
+			NONRESUME_HOSTS+=($URL)
+			;;
+	esac
+done
+
+printf "
+........................................................................
+"
+
+RESUME_H_COUNT=${#RESUME_HOSTS[@]}
+NONRESUME_H_COUNT=${#NONRESUME_HOSTS[@]}
+
+declare -i NONRESUME_H_REAL_COUNT=0 	# max 1
+declare -i HOSTS_REAL_COUNT=0			# [0-1]+resume_hosts
+declare -i byte_offset=0				# chunk per host
+declare -i allocated_bytes=0 			# bytes assigned to host
+declare -i active_downloads=0 			# assigned downloads
+
+FileName=`echo $@ | awk -F "/" '{print $NF}'` # Ok to use array like this?
+
+# Only accept one download from non-resume hosts (not supporting byte range)!
+if [[ $NONRESUME_H_COUNT > 0  || $RESUME_H_COUNT > 0 ]]; then
+	# Non-resumeable host(s)?
+	if [[ $NONRESUME_H_COUNT > 0 ]]; then
+		# Yes.
+		NONRESUME_H_REAL_COUNT=1
+	else
+		# No.
+		NONRESUME_H_REAL_COUNT=0
+	fi
+	
+	# Usable hosts and bytes/host
+	HOSTS_REAL_COUNT=$((NONRESUME_H_REAL_COUNT+RESUME_H_COUNT))
+	byte_offset=$((SIZE/HOSTS_REAL_COUNT))
+
+	# Todo:	
+	# - Add size check for each url and match filesizes
+	# - Check gzipped or raw for all servers? force gzip? Can be different numbers?
+	# - add filenames(with_part_#) to array, ro check status and show progress
+	# - Pick the best if there are many non-resumable hosts
+	# - handle http codes, handle wrong size
+
+	printf "
+Dividing file into byte ranges and assigning to capable servers...
+	 
+FileName:         $FileName
+FileSize:         $SIZE bytes
+Bytes/AllHosts:   $BYTE_SHARE
+Bytes/UseHosts:   $byte_offset
+	 
+Hosts:            $URLCOUNT
+Resumeable:       $RESUME_H_COUNT
+Non-resumeable:   $NONRESUME_H_COUNT
+Useable:          $HOSTS_REAL_COUNT
+
+........................................................................\n\n"
+
+	# Zero length? http codes are about 2-500 bytes - limit to first server size
+	if [[ $SIZE = 0 ]]; then # 1 / 0
+		# We probably hit an html document... Currently not downloading those
+		printf "
+________________________________________________________________________
+		
+    	:(
+		 
+	Unfortunately,
+	we are only dealing with remote files larger than 0 bytes...
+		
+________________________________________________________________________
+"		exit 2
+
+	elif [[ SIZE < 1000 ]]; then 
+	# TODO: PS: BUG! check each server respponse (at least) and size
+	#elif [[ ! $SIZE = CurrentSiteContentSize ]]; then
+		printf "
+________________________________________________________________________
+		
+    	:(
+		 
+	Unfortunately,
+	we are expecting the first servers reported filesize to be god...
+		
+________________________________________________________________________
+"		exit 3
+	fi
+
+	# download nonresume_host[0] byterange 0-byte_share
+	printf "Downloading parts... \n\n"
+
+	# One non-resumable host - Use it for the first byte range
+	if [[ $NONRESUME_H_COUNT > 0 ]]; then
+
+		printf "Non-resumeable: \n\n"
+
+		printf "Part \t \t Range\n\n"
+
+		URL=$NONRESUME_HOSTS
+
+		startDownload $URL
+
+	fi
+
+	printf "\nResumable: \n\n"
+
+	printf "Part \t \t Range\n\n"
+
+	# Zero non-resumeable hosts - Starting with one or more resume hosts
+	if [[ $RESUME_H_COUNT > 0 && $NONRESUME_H_COUNT = 0 ]]; then
+
+		for URL in "${RESUME_HOSTS[@]}"
+		do
+			startDownload $URL
+		done
+
+	# One non-resumeable host - Already started - Follow with resumable hosts
+	elif [[ $RESUME_H_COUNT > 0 ]]; then
+
+		for URL in "${RESUME_HOSTS[@]}"
+		do
+			startDownload $URL
+		done
+
+	# Zero resumeable hosts - sigh...
+	else
+		echo ":("
+	fi
+
+fi
+
+# Todo:
+# - wait for files to be complete (while file(s) not size in bytes..)
+#   when done:
+# - cat filename-part? > real_filename
+# - function to addUrl, remove, autocontinue
+# - resume:
+# curl -C - 'url_part_#' (auto resume from right point)
+# ncurses gui?
+
+printf "
+________________________________________________________________________
+
+
+Curl download processes:"
+
+dotcount=1
+dotten="."
+dot=$dotten
+PROCS=1
+while [[ ! $PROCS = 0 ]]; do
+	#printf "\b" # move back one char (backspace)
+	#echo $dotcount
+	if ((dotcount > 72)); then
+		dotcount=1
+		dot=$dotten
+	fi
+
+	PROCS=`ps -C | grep -c curl` #`ps -C | grep curl | wc -l` #`ps -Al |grep curl | wc -l` #`ps -C curl --no-headers | wc -l` #`ps x | grep curl`
+	PROCS=$((PROCS-1))
+
+	printf "\e[1K" # 1 = clear from cursor to beginning of line
+	printf "\e[1F" # F up n lines to beginning, E down n lines (CSI n F)
+
+	printf "Current download processes: \033[32m$PROCS\e[0m /\e[31m 100 \e[0m" # procs / max
+	printf "\n$dot"
+
+	dot=$dot$dotten
+	((dotcount++))
+
+	#sleep 1
+done
+
+#printf "\033[A"
+#echo "Curl download processes: complete!"
+printf "\e[1K\e[1F
+
+........................................................................
+
+Joining files..."
+
+cat "$FileName"_part_? > $FileName # Wait for completion, rather than ()
+
+printf "\e[1K\e[1F" # delete to last \n + move to last \n (not \033[A)
+printf "Joining files:  \033[32mOK!\033[0m"
+
+# Interresting feature/bug ... lists all parts..!
+#echo $FileName$Part'? > '$FileName' &'
+#tst=$FileName$Part'? > '$FileName' &'
+#echo $tst
+
+#printf "\a"
+#sleep 1
+#osascript -e "beep 1"
+#sleep 1
+##echo -ne '\007' # e to prosecc escapes
+#sleep 5
+tput bel
+echo 
+printf "All Done! \033[32m :) \033[0m \n"
+echo
+echo
+echo ________________________________________________________________________
+echo
+
+exit 0
