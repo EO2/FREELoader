@@ -52,12 +52,9 @@ ________________________________________________________________________
 
 startDownload() {
 	local url=$1
-	#printf "$FileName"_part_"$active_downloads \t ByteRange: \t $allocated_bytes - $byte_offset \n"
-	
 	printf "%d \t %20d - %20d \n" "$active_downloads" "$allocated_bytes" "$byte_offset"
-
-	(curl -s -r $allocated_bytes-$byte_offset $url -o "$FileName"_part_"$active_downloads" &)
-
+	(curl -L -s -r $allocated_bytes-$byte_offset $url -o "$FileName"_part_"$active_downloads" &)
+	#(curl -s -r $allocated_bytes-$byte_offset $url -o "$FileName"_part_"$active_downloads" &) # Dont follow redirects
 	allocated_bytes=$byte_offset
 	byte_offset=$((byte_offset+byte_offset))
 	((active_downloads++))
@@ -66,6 +63,13 @@ startDownload() {
 [[ $# -lt 1 ]] && usage
 
 # TODO: 
+
+# Ensure that all servers report the same Content-Length
+# Ensure that all servers really support byte ranges (Code 416 - Requested Range Not Satisfiable)
+
+# Optionally follow redirects (-f/--follow)
+
+#
 # Watch download folder, display downloads progress,
 # resume interrupted (after t time), resume part_0 on resume server if interrupted
 # write in C / C++ - use libcurl + other dns (bad curl blocking lookups and bad cace)
@@ -87,21 +91,14 @@ startDownload() {
 checkLength() {
 	local url=$1
 	local size=`curl -I -f -s -m 3 "$1" | awk '/Content-Length/ { printf "%d\n", $2 }'`
-	#[$size == $SIZE] && 
 	printf "$size"
-	#echo "$size"
 }
 
 echo checkLength $1
 
 declare -i SIZE=`checkLength $1`
 
-#echo $@
-#echo "$1"
-
 printf "$SIZE"
-
-#exit 5
 
 declare -i URLCOUNT=$# 	# Assuming each argument is a valid url for same file
 BYTE_SHARE=$((SIZE/URLCOUNT)) 	# For presision: echo "$SIZE/$URLCOUNT" | bc
@@ -112,7 +109,7 @@ printf "
 Checking if servers support byte ranges (split and resume downloads)...
 
 "
-for URL in "$@" # "${URLS[@]}"
+for URL in "$@" # "${URLS[@]}" $@
 do
 	# Check for "Accept-Ranges: bytes" in HEAD
 	RESUME=`curl -I -f -s -m 3 ${URL} | awk '/Accept-Ranges/ { print $2 }'` # echo -n ... remove newline at end?
@@ -145,7 +142,7 @@ declare -i byte_offset=0				# chunk per host
 declare -i allocated_bytes=0 			# bytes assigned to host
 declare -i active_downloads=0 			# assigned downloads
 
-FileName=`echo $@ | awk -F "/" '{print $NF}'` # Ok to use array like this?
+FileName=`printf $@ | awk -F "/" '{print $NF}'` # Ok to use array like this?
 
 # Only accept one download from non-resume hosts (not supporting byte range)!
 if [[ $NONRESUME_H_COUNT > 0  || $RESUME_H_COUNT > 0 ]]; then
@@ -251,7 +248,7 @@ ________________________________________________________________________
 
 	# Zero resumeable hosts - sigh...
 	else
-		echo ":("
+		printf ":(\n"
 	fi
 
 fi
@@ -323,11 +320,11 @@ printf "Joining files:  \033[32mOK!\033[0m"
 ##echo -ne '\007' # e to prosecc escapes
 #sleep 5
 tput bel
-echo 
-printf "All Done! \033[32m :) \033[0m \n"
-echo
-echo
-echo ________________________________________________________________________
-echo
+
+printf "
+All Done! \033[32m :) \033[0m
+
+________________________________________________________________________
+"
 
 exit 0
